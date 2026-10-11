@@ -1,0 +1,502 @@
+import type { CallbackData } from "@gramio/callback-data";
+import type { MacroDefinitions, Next } from "@gramio/composer";
+import type {
+	BotLike,
+	Context,
+	ContextType,
+	UpdateName,
+} from "@gramio/contexts";
+import type { FileSource } from "@gramio/files";
+import type {
+	APIMethodParams,
+	APIMethodReturn,
+	APIMethods,
+	SetWebhookParams,
+	TelegramBotCommandScope,
+	TelegramUser,
+} from "@gramio/types";
+import type { Bot } from "./bot.js";
+import type { TelegramError } from "./errors.js";
+import type { Plugin } from "./plugin.js";
+
+/** Bot options that you can provide to {@link Bot} constructor */
+export interface BotOptions {
+	/** Bot token */
+	token: string;
+	/** When the bot begins to listen for updates, `GramIO` retrieves information about the bot to verify if the **bot token is valid**
+	 * and to utilize some bot metadata. For example, this metadata will be used to strip bot mentions in commands.
+	 *
+	 * If you set it up, `GramIO` will not send a `getMe` request on startup.
+	 *
+	 * @important
+	 * **You should set this up when horizontally scaling your bot or working in serverless environments.**
+	 * */
+	info?: TelegramUser;
+	/** List of plugins enabled by default */
+	plugins?: {
+		/** Pass `false` to disable plugin. @default true */
+		format?: boolean;
+	};
+	/** Options to configure how to send requests to the Telegram Bot API */
+	api: {
+		/** Configure {@link fetch} parameters */
+		fetchOptions?: Parameters<typeof fetch>[1];
+		/** URL which will be used to send requests to. @default "https://api.telegram.org/bot" */
+		baseURL: string;
+		/**
+		 * 	Should we send requests to `test` data center?
+		 * 	The test environment is completely separate from the main environment, so you will need to create a new user account and a new bot with `@BotFather`.
+		 *
+		 * 	[Documentation](https://core.telegram.org/bots/webapps#using-bots-in-the-test-environment)
+		 * 	@default false
+		 * */
+		useTest?: boolean;
+
+		/**
+		 * Time in milliseconds before calling {@link APIMethods.getUpdates | getUpdates} again
+		 * @default 1000
+		 */
+		retryGetUpdatesWait?: number;
+	};
+	/**
+	 * File download/serving options — mainly for a **local Bot API server**.
+	 *
+	 * @example
+	 * ```ts
+	 * const bot = new Bot(token, {
+	 *     api: { baseURL: "http://telegram-bot-api:8081/bot" },
+	 *     files: {
+	 *         // bot.getFileLink() and ctx.download() resolve to this (token-less) URL
+	 *         baseURL: "http://telegram-bot-api:8080",
+	 *     },
+	 * });
+	 * ```
+	 */
+	files?: {
+		/** How to fetch file bytes. @default "auto" */
+		source?: FileSource;
+		/** Working directory of the local Bot API server — the prefix of the absolute `file_path` it returns. @default "/var/lib/telegram-bot-api" */
+		localDir?: string;
+		/** Where that working dir is mounted on the bot's side (for `source: "disk"` when bot & server share a volume at a different path). Defaults to `localDir`. */
+		mountDir?: string;
+		/** Public base URL where the working dir is served (e.g. the bundled file server / nginx). Enables token-less {@link Bot.getFileLink} and `source: "rewrite"`. */
+		baseURL?: string;
+	};
+}
+
+/**
+ * Handler is a function with context and next function arguments
+ *
+ * @example
+ * ```ts
+ * const handler: Handler<ContextType<Bot, "message">> = (context, _next) => context.send("HI!");
+ *
+ * bot.on("message", handler)
+ * ```
+ */
+export type Handler<T> = (context: T, next: Next) => unknown;
+
+interface ErrorHandlerParams<
+	Ctx extends Context<AnyBot>,
+	Kind extends string,
+	Err,
+> {
+	context: Ctx;
+	kind: Kind;
+	error: Err;
+}
+
+type AnyTelegramError<Methods extends keyof APIMethods = keyof APIMethods> = {
+	[APIMethod in Methods]: TelegramError<APIMethod>;
+}[Methods];
+
+type AnyTelegramMethod<Methods extends keyof APIMethods> = {
+	[APIMethod in Methods]: {
+		method: APIMethod;
+		params: MaybeSuppressedParams<APIMethod>;
+	};
+}[Methods];
+
+/**
+ * Interface for add `suppress` param to params
+ */
+export interface Suppress<
+	IsSuppressed extends boolean | undefined = undefined,
+> {
+	/**
+	 * Pass `true` if you want to suppress throwing errors of this method.
+	 *
+	 * **But this does not undo getting into the `onResponseError` hook**.
+	 *
+	 * @example
+	 * ```ts
+	 * const response = await bot.api.sendMessage({
+	 * 		suppress: true,
+	 * 		chat_id: "@not_found",
+	 * 		text: "Suppressed method"
+	 * });
+	 *
+	 * if(response instanceof TelegramError) console.error("sendMessage returns an error...")
+	 * else console.log("Message has been sent successfully");
+	 * ```
+	 *
+	 * */
+	suppress?: IsSuppressed;
+}
+
+/** Type that assign API params with {@link Suppress} */
+export type MaybeSuppressedParams<
+	Method extends keyof APIMethods,
+	IsSuppressed extends boolean | undefined = undefined,
+> = APIMethodParams<Method> & Suppress<IsSuppressed>;
+
+/** Return method params but with {@link Suppress} */
+export type SuppressedAPIMethodParams<Method extends keyof APIMethods> =
+	undefined extends APIMethodParams<Method>
+		? Suppress<true>
+		: MaybeSuppressedParams<Method, true>;
+
+/** Type that return MaybeSuppressed API method ReturnType */
+export type MaybeSuppressedReturn<
+	Method extends keyof APIMethods,
+	IsSuppressed extends boolean | undefined = undefined,
+> = true extends IsSuppressed
+	? TelegramError<Method> | APIMethodReturn<Method>
+	: APIMethodReturn<Method>;
+
+/** Type that return {@link Suppress | Suppressed} API method ReturnType */
+export type SuppressedAPIMethodReturn<Method extends keyof APIMethods> =
+	MaybeSuppressedReturn<Method, true>;
+
+/** Map of APIMethods but with {@link Suppress} */
+export type SuppressedAPIMethods<
+	Methods extends keyof APIMethods = keyof APIMethods,
+> = {
+	[APIMethod in Methods]: APIMethodParams<APIMethod> extends undefined
+		? <IsSuppressed extends boolean | undefined = undefined>(
+				params?: Suppress<IsSuppressed>,
+			) => Promise<MaybeSuppressedReturn<APIMethod, IsSuppressed>>
+		: undefined extends APIMethodParams<APIMethod>
+			? <IsSuppressed extends boolean | undefined = undefined>(
+					params?: MaybeSuppressedParams<APIMethod, IsSuppressed>,
+				) => Promise<MaybeSuppressedReturn<APIMethod, IsSuppressed>>
+			: <IsSuppressed extends boolean | undefined = undefined>(
+					params: MaybeSuppressedParams<APIMethod, IsSuppressed>,
+				) => Promise<MaybeSuppressedReturn<APIMethod, IsSuppressed>>;
+};
+
+type AnyTelegramMethodWithReturn<Methods extends keyof APIMethods> = {
+	[APIMethod in Methods]: {
+		method: APIMethod;
+		params: APIMethodParams<APIMethod>;
+		response: APIMethodReturn<APIMethod>;
+	};
+}[Methods];
+
+/** Type for maybe {@link Promise} or may not */
+export type MaybePromise<T> = Promise<T> | T;
+
+/**
+ * Namespace with GramIO hooks types
+ *
+ * [Documentation](https://gramio.dev/hooks/overview.html)
+ * */
+export namespace Hooks {
+	/** Derive */
+	export type Derive<Ctx> = (
+		context: Ctx,
+	) => MaybePromise<Record<string, unknown>>;
+
+	/** Argument type for {@link PreRequest} */
+	export type PreRequestContext<Methods extends keyof APIMethods> =
+		AnyTelegramMethod<Methods>;
+
+	/**
+	 * Type for `preRequest` hook
+	 *
+	 * @example
+	 * ```typescript
+	 * import { Bot } from "gramio";
+	 *
+	 * const bot = new Bot(process.env.TOKEN!).preRequest((context) => {
+	 *     if (context.method === "sendMessage") {
+	 *         context.params.text = "mutate params";
+	 *     }
+	 *
+	 *     return context;
+	 * });
+	 *
+	 * bot.start();
+	 * ```
+	 *
+	 * [Documentation](https://gramio.dev/hooks/pre-request.html)
+	 *  */
+	export type PreRequest<Methods extends keyof APIMethods = keyof APIMethods> =
+		(
+			ctx: PreRequestContext<Methods>,
+		) => MaybePromise<PreRequestContext<Methods>>;
+
+	/** Argument type for {@link OnError} */
+	export type OnErrorContext<
+		Ctx extends Context<AnyBot>,
+		T extends ErrorDefinitions,
+	> =
+		| ErrorHandlerParams<Ctx, "TELEGRAM", AnyTelegramError>
+		| ErrorHandlerParams<Ctx, "UNKNOWN", Error>
+		| {
+				// TODO: improve typings
+				[K in keyof T]: ErrorHandlerParams<Ctx, K & string, T[K & string]>;
+		  }[keyof T];
+
+	/**
+	 * Type for `onError` hook
+	 *
+	 * @example
+	 * ```typescript
+	 * bot.on("message", () => {
+	 *     bot.api.sendMessage({
+	 *         chat_id: "@not_found",
+	 *         text: "Chat not exists....",
+	 *     });
+	 * });
+	 *
+	 * bot.onError(({ context, kind, error }) => {
+	 *     if (context.is("message")) return context.send(`${kind}: ${error.message}`);
+	 * });
+	 * ```
+	 *
+	 * [Documentation](https://gramio.dev/hooks/on-error.html)
+	 *  */
+	export type OnError<
+		T extends ErrorDefinitions,
+		Ctx extends Context<any> = Context<AnyBot>,
+	> = (options: OnErrorContext<Ctx, T>) => unknown;
+
+	/**
+	 * Type for `onStart` hook
+	 *
+	 * @example
+	 * ```typescript
+	 * import { Bot } from "gramio";
+	 *
+	 * const bot = new Bot(process.env.TOKEN!).onStart(
+	 *     ({ plugins, info, updatesFrom, bot }) => {
+	 *         console.log(`plugin list - ${plugins.join(", ")}`);
+	 *         console.log(`bot username is @${info.username}`);
+	 * 		   console.log(`updates from ${updatesFrom}`);
+	 *     }
+	 * );
+	 *
+	 * bot.start();
+	 * ```
+	 *
+	 * [Documentation](https://gramio.dev/hooks/on-start.html)
+	 *  */
+	export type OnStart = (context: {
+		plugins: string[];
+		info: TelegramUser;
+		updatesFrom: "webhook" | "long-polling";
+		bot: BotLike;
+	}) => unknown;
+
+	/**
+	 * Type for `onStop` hook
+	 *
+	 * @example
+	 * ```typescript
+	 * import { Bot } from "gramio";
+	 *
+	 * const bot = new Bot(process.env.TOKEN!).onStop(
+	 *     ({ plugins, info, bot }) => {
+	 *         console.log(`plugin list - ${plugins.join(", ")}`);
+	 *         console.log(`bot username is @${info.username}`);
+	 *     }
+	 * );
+	 *
+	 * bot.start();
+	 * bot.stop();
+	 * ```
+	 *
+	 * [Documentation](https://gramio.dev/hooks/on-stop.html)
+	 *  */
+	export type OnStop = (context: {
+		plugins: string[];
+		info: TelegramUser;
+		bot: BotLike;
+	}) => unknown;
+
+	/**
+	 * Type for `onResponseError` hook
+	 *
+	 * [Documentation](https://gramio.dev/hooks/on-response-error.html)
+	 * */
+	export type OnResponseError<
+		Methods extends keyof APIMethods = keyof APIMethods,
+	> = (context: AnyTelegramError<Methods>, api: Bot["api"]) => unknown;
+
+	/**
+	 * Type for `onResponse` hook
+	 *
+	 * [Documentation](https://gramio.dev/hooks/on-response.html)
+	 *  */
+	export type OnResponse<Methods extends keyof APIMethods = keyof APIMethods> =
+		(context: AnyTelegramMethodWithReturn<Methods>) => unknown;
+
+	/** Argument type for {@link OnApiCall} */
+	export type OnApiCallContext<Methods extends keyof APIMethods> =
+		AnyTelegramMethod<Methods>;
+
+	/**
+	 * Type for `onApiCall` hook (wrap-style)
+	 *
+	 * This hook wraps the entire API call execution, enabling span creation
+	 * around API calls for tracing/instrumentation.
+	 *
+	 * @example
+	 * ```typescript
+	 * import { Bot } from "gramio";
+	 *
+	 * const bot = new Bot(process.env.TOKEN!).onApiCall(async (context, next) => {
+	 *     console.log(`Calling ${context.method}`);
+	 *     const result = await next();
+	 *     console.log(`${context.method} completed`);
+	 *     return result;
+	 * });
+	 * ```
+	 *  */
+	export type OnApiCall<Methods extends keyof APIMethods = keyof APIMethods> = (
+		context: OnApiCallContext<Methods>,
+		next: () => Promise<unknown>,
+	) => Promise<unknown>;
+
+	/** Store hooks */
+	export interface Store<T extends ErrorDefinitions> {
+		preRequest: PreRequest[];
+		onResponse: OnResponse[];
+		onResponseError: OnResponseError[];
+		onError: OnError<T>[];
+		onStart: OnStart[];
+		onStop: OnStop[];
+		onApiCall: OnApiCall[];
+	}
+}
+
+/** Error map should be map of string: error */
+export type ErrorDefinitions = Record<string, Error>;
+
+/** Map of derives */
+export type DeriveDefinitions = Record<UpdateName | "global", {}>;
+
+/** Type of Bot that accepts any generics */
+export type AnyBot = Bot<any, any, any>;
+
+/** Type of Bot that accepts any generics */
+export type AnyPlugin = Plugin<any, any, any>;
+
+export type CallbackQueryShorthandContext<
+	BotType extends BotLike,
+	Trigger extends CallbackData | string | RegExp,
+> = Omit<ContextType<BotType, "callback_query">, "data"> &
+	BotType["__Derives"]["global"] &
+	BotType["__Derives"]["callback_query"] & {
+		queryData: Trigger extends CallbackData
+			? ReturnType<Trigger["unpack"]>
+			: Trigger extends RegExp
+				? RegExpMatchArray
+				: never;
+	};
+
+export type BotStartOptionsLongPolling = Omit<
+	NonNullable<APIMethodParams<"getUpdates">>,
+	"allowed_updates" | "offset"
+>;
+
+export type BotStartOptionsWebhook =
+	| true
+	| string
+	| Omit<SetWebhookParams, "drop_pending_updates" | "allowed_updates">;
+
+export type AllowedUpdates = Exclude<
+	NonNullable<APIMethodParams<"getUpdates">>["allowed_updates"],
+	"update_id"
+>;
+
+export interface BotStartOptions {
+	webhook?: BotStartOptionsWebhook;
+	longPolling?: BotStartOptionsLongPolling;
+	dropPendingUpdates?: boolean;
+	/**
+	 * Which update types to receive from Telegram.
+	 *
+	 * - **`undefined`** (default) — Telegram's default set, plus automatic opt-in
+	 *   for `chat_member`, `message_reaction`, and `message_reaction_count` if
+	 *   the bot has handlers registered for them.
+	 * - **`"strict"`** — only receive update types that handlers explicitly
+	 *   register for via `.on()`. Equivalent to `AllowedUpdatesFilter.from(bot)`.
+	 *   Filter-only `.on()` and `.use()` are not included.
+	 * - **`AllowedUpdatesFilter` / array** — explicit list of update types.
+	 *
+	 * @example
+	 * ```typescript
+	 * // Auto opt-in (default): Telegram default + auto chat_member/reaction if needed
+	 * bot.start();
+	 *
+	 * // Strict: only registered events
+	 * bot.start({ allowedUpdates: "strict" });
+	 *
+	 * // Manual
+	 * bot.start({ allowedUpdates: AllowedUpdatesFilter.all });
+	 *
+	 * // Strict + customize
+	 * bot.start({ allowedUpdates: AllowedUpdatesFilter.from(bot).add("poll") });
+	 * ```
+	 */
+	allowedUpdates?: AllowedUpdates | "strict";
+	// "on conflict with long-polling"
+	deleteWebhook?: boolean | "on-conflict-with-polling";
+}
+
+export interface PollingStartOptions {
+	dropPendingUpdates?: boolean;
+	deleteWebhookOnConflict?: boolean;
+}
+
+// ─── Command Metadata Types ─────────────────────────────────────────────────
+
+/** Shorthand strings for common BotCommandScope types */
+export type ScopeShorthand =
+	| "default"
+	| "all_private_chats"
+	| "all_group_chats"
+	| "all_chat_administrators";
+
+/**
+ * Metadata for a bot command, used by `syncCommands()` to push
+ * descriptions, localized names, and visibility scopes to the Telegram API.
+ */
+export interface CommandMeta {
+	/** Command description shown in the Telegram menu (1-256 chars) */
+	description: string;
+	/** Localized descriptions keyed by IETF language tag */
+	locales?: Record<string, string>;
+	/** Where this command is visible. Default: `["default"]` */
+	scopes?: (TelegramBotCommandScope | ScopeShorthand)[];
+	/** Exclude this command from `syncCommands()`. The handler still works. @default false */
+	hide?: boolean;
+}
+
+/** Minimal key-value storage interface compatible with `@gramio/storage` */
+export interface SyncStorage {
+	get(key: string): string | undefined | Promise<string | undefined>;
+	set(key: string, value: string): void | Promise<void>;
+}
+
+/** Options for {@link Bot.syncCommands} */
+export interface SyncCommandsOptions {
+	/** Storage for caching sync hashes. When provided, only changed groups trigger API calls. */
+	storage?: SyncStorage;
+	/** Delete commands for scopes not declared by any command. @default false */
+	cleanUnusedScopes?: boolean;
+	/** Command names to exclude from syncing (in addition to commands with `hide: true`) */
+	exclude?: string[];
+}

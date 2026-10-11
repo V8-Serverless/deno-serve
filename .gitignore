@@ -1,0 +1,8 @@
+node_modules
+dist
+tsconfig.tsbuildinfo
+test.ts
+.env
+*.local.ts
+test.html
+**/*.local.json
