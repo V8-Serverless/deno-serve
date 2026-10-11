@@ -1,0 +1,83 @@
+name: Publish package
+
+on:
+    workflow_dispatch:
+        inputs:
+            publish_to_npm:
+                description: "Publish package to NPM"
+                required: false
+                type: boolean
+                default: true
+            publish_to_jsr:
+                description: "Publish package to JSR"
+                required: false
+                type: boolean
+                default: true
+
+permissions:
+    contents: write
+    id-token: write
+
+jobs:
+    publish_package:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Install Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: latest
+
+            - id: changelog
+              name: Generate changelog
+              run: bun scripts/generate-changelog.ts
+
+            - name: Install modules
+              run: bun install
+
+            - name: Run tests
+              run: bun test
+
+            # Type-check the real source against clean node_modules. Must run
+            # BEFORE `bun jsr` — the slow-types compiler rewrites dependency
+            # .d.ts files (e.g. dropping `@gramio/composer` type re-exports),
+            # which would make a post-jsr tsc fail on otherwise-valid code.
+            - name: Type-check
+              run: bunx tsc --noEmit
+
+            - name: Prepare to JSR publish
+              run: bun jsr
+
+            - name: Setup Deno
+              uses: denoland/setup-deno@v1
+
+            # - name: Publish package to JSR
+            #   if: ${{ github.event.inputs.publish_to_jsr }}
+            #   run: deno publish --allow-dirty --unstable-sloppy-imports --allow-slow-types
+
+            - name: Setup Node for npm trusted publishing
+              uses: actions/setup-node@v6
+              with:
+                  node-version: "24"
+                  registry-url: "https://registry.npmjs.org"
+                  package-manager-cache: false
+
+            - name: Publish package to NPM
+              if: ${{ github.event.inputs.publish_to_npm }}
+              run: npm publish --access public
+
+            - name: GitHub Release
+              uses: ncipollo/release-action@v1
+              with:
+                  token: ${{ secrets.GITHUB_TOKEN }}
+                  tag: v${{ steps.changelog.outputs.version }}
+                  name: v${{ steps.changelog.outputs.version }}
+                  body: ${{ steps.changelog.outputs.changelog }}
+                  draft: false
+                  prerelease: false
+                  generateReleaseNotes: true

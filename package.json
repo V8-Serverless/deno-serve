@@ -1,0 +1,96 @@
+{
+	"name": "gramio",
+	"type": "module",
+	"version": "0.15.1",
+	"description": "Powerful, extensible and really type-safe Telegram Bot API framework",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/gramiojs/gramio.git"
+	},
+	"main": "dist/index.cjs",
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		},
+		"./utils": {
+			"import": {
+				"types": "./dist/utils.d.ts",
+				"default": "./dist/utils.js"
+			},
+			"require": {
+				"types": "./dist/utils.d.cts",
+				"default": "./dist/utils.cjs"
+			}
+		},
+		"./rich": {
+			"import": {
+				"types": "./dist/rich.d.ts",
+				"default": "./dist/rich.js"
+			},
+			"require": {
+				"types": "./dist/rich.d.cts",
+				"default": "./dist/rich.cjs"
+			}
+		}
+	},
+	"keywords": [
+		"telegram",
+		"telegram-bot",
+		"telegram-bot-api",
+		"bot",
+		"framework",
+		"types",
+		"client",
+		"webhook",
+		"long-polling",
+		"files",
+		"plugins",
+		"format",
+		"contexts",
+		"files"
+	],
+	"scripts": {
+		"type": "tsc --noEmit",
+		"lint": "bunx @biomejs/biome check ./src",
+		"lint:fix": "bun lint --apply",
+		"prepublishOnly": "bun test && bunx tsc --noEmit && bunx pkgroll",
+		"jsr": "bun scripts/release-jsr.ts",
+		"try-deno": "deno publish --unstable-sloppy-imports --dry-run --allow-slow-types --allow-dirty"
+	},
+	"author": "kravets",
+	"license": "MIT",
+	"devDependencies": {
+		"@biomejs/biome": "2.4.14",
+		"@gramio/test": "^0.7.0",
+		"@types/bun": "^1.3.13",
+		"@types/debug": "^4.1.13",
+		"expect-type": "^1.3.0",
+		"pkgroll": "^2.27.0",
+		"typescript": "^5.9.3"
+	},
+	"dependencies": {
+		"@gramio/callback-data": "^0.2.0",
+		"@gramio/composer": "^0.5.0",
+		"@gramio/contexts": "^0.12.0",
+		"@gramio/files": "^0.8.1",
+		"@gramio/format": "^0.12.1",
+		"@gramio/keyboards": "^1.5.0",
+		"@gramio/types": "^10.3.1",
+		"debug": "^4.4.3"
+	},
+	"files": [
+		"dist"
+	],
+	"overrides": {
+		"@gramio/types": "$@gramio/types"
+	}
+}
